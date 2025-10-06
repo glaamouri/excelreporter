@@ -114,12 +114,14 @@ Private Sub AnalyzeNamedRanges(wb As Workbook)
     End If
 End Sub
 
+' --- NEW, MORE ROBUST VERSION ---
 Private Sub AnalyzeDataConnections(wb As Workbook)
     Dim ws As Worksheet
     Dim lo As ListObject
     Dim tq As QueryTable
     Dim wq As WorkbookQuery
     Dim addressKey As String
+    Dim sheetName As String
     
     For Each ws In wb.Worksheets
         For Each lo In ws.ListObjects
@@ -134,9 +136,12 @@ Private Sub AnalyzeDataConnections(wb As Workbook)
                 WriteInfo "Source Type:", "Legacy QueryTable", 1
                 WriteInfo "Connection:", tq.Connection, 1
                 
-                '--- FIX: Create a more robust address key ---
+                '--- FIX: Properly handle sheet names with apostrophes ---
                 If Not lo.DataBodyRange Is Nothing Then
-                    addressKey = "'" & lo.Parent.Name & "'!" & lo.DataBodyRange.Address
+                    sheetName = lo.Parent.Name
+                    ' Escape any single quotes in the sheet name by doubling them up
+                    sheetName = Replace(sheetName, "'", "''")
+                    addressKey = "'" & sheetName & "'!" & lo.DataBodyRange.Address
                     noScanZones(addressKey) = True ' Add to no-scan list
                 End If
             End If
@@ -151,10 +156,13 @@ Private Sub AnalyzeDataConnections(wb As Workbook)
              WriteInfo "Query Name:", wq.Name & " (Loads to Table '" & wq.ListObject.Name & "')"
              WriteInfo "Table Location:", wq.ListObject.Range.Address(External:=True), 1
              
-             '--- FIX: Create a more robust address key ---
+             '--- FIX: Properly handle sheet names with apostrophes ---
              If Not wq.ListObject.DataBodyRange Is Nothing Then
                 Set lo = wq.ListObject
-                addressKey = "'" & lo.Parent.Name & "'!" & lo.DataBodyRange.Address
+                sheetName = lo.Parent.Name
+                ' Escape any single quotes in the sheet name by doubling them up
+                sheetName = Replace(sheetName, "'", "''")
+                addressKey = "'" & sheetName & "'!" & lo.DataBodyRange.Address
                 noScanZones(addressKey) = True ' Add to no-scan list
              End If
         End If
