@@ -1,8 +1,10 @@
+' These variables are declared at the module level so both subs can use them
+Dim reportSheet As Worksheet
+Dim reportRow As Long
+
 Sub GenerateWorkbookReport()
     ' --- SETUP ---
     Dim wb As Workbook
-    Dim reportSheet As Worksheet
-    Dim reportRow As Long
     Dim ws As Worksheet
     Dim cell As Range
     Dim nm As Name
@@ -21,14 +23,6 @@ Sub GenerateWorkbookReport()
     ' Create a new sheet for the report
     Set reportSheet = wb.Worksheets.Add(After:=wb.Worksheets(wb.Worksheets.Count))
     reportSheet.Name = "Workbook_Info"
-    
-    ' Function to easily write headers and content
-    Sub WriteInfo(header As String, content As String)
-        reportSheet.Cells(reportRow, 1).Value = header
-        reportSheet.Cells(reportRow, 2).Value = content
-        reportSheet.Cells(reportRow, 1).Font.Bold = True
-        reportRow = reportRow + 1
-    End Sub
     
     ' --- 1. WORKBOOK INFORMATION ---
     WriteInfo "--- WORKBOOK SUMMARY ---", ""
@@ -107,4 +101,14 @@ Sub GenerateWorkbookReport()
     reportSheet.Columns("A:B").AutoFit
     MsgBox "Workbook information report has been generated on the 'Workbook_Info' sheet."
 
+End Sub ' This now properly ends the main macro
+
+
+' --- HELPER SUBROUTINE ---
+' This is now outside the main sub and can function correctly.
+Sub WriteInfo(header As String, content As String)
+    reportSheet.Cells(reportRow, 1).Value = header
+    reportSheet.Cells(reportRow, 2).Value = content
+    reportSheet.Cells(reportRow, 1).Font.Bold = True
+    reportRow = reportRow + 1
 End Sub
