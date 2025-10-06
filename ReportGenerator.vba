@@ -119,6 +119,7 @@ Private Sub AnalyzeDataConnections(wb As Workbook)
     Dim lo As ListObject
     Dim tq As QueryTable
     Dim wq As WorkbookQuery
+    Dim addressKey As String
     
     For Each ws In wb.Worksheets
         For Each lo In ws.ListObjects
@@ -132,7 +133,12 @@ Private Sub AnalyzeDataConnections(wb As Workbook)
                 WriteInfo "Range:", lo.Range.Address, 1
                 WriteInfo "Source Type:", "Legacy QueryTable", 1
                 WriteInfo "Connection:", tq.Connection, 1
-                noScanZones(lo.DataBodyRange.Address(External:=True)) = True ' Add to no-scan list
+                
+                '--- FIX: Create a more robust address key ---
+                If Not lo.DataBodyRange Is Nothing Then
+                    addressKey = "'" & lo.Parent.Name & "'!" & lo.DataBodyRange.Address
+                    noScanZones(addressKey) = True ' Add to no-scan list
+                End If
             End If
         Next lo
     Next ws
@@ -144,7 +150,13 @@ Private Sub AnalyzeDataConnections(wb As Workbook)
         Else
              WriteInfo "Query Name:", wq.Name & " (Loads to Table '" & wq.ListObject.Name & "')"
              WriteInfo "Table Location:", wq.ListObject.Range.Address(External:=True), 1
-             noScanZones(wq.ListObject.DataBodyRange.Address(External:=True)) = True ' Add to no-scan list
+             
+             '--- FIX: Create a more robust address key ---
+             If Not wq.ListObject.DataBodyRange Is Nothing Then
+                Set lo = wq.ListObject
+                addressKey = "'" & lo.Parent.Name & "'!" & lo.DataBodyRange.Address
+                noScanZones(addressKey) = True ' Add to no-scan list
+             End If
         End If
         WriteInfo "Source Type:", "Power Query", 1
         WriteInfo "M Code:", wq.Formula, 1
