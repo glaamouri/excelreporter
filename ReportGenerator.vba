@@ -158,9 +158,9 @@ Private Sub AnalyzeCellContent(wb As Workbook)
     
     For Each ws In wb.Worksheets
         WriteInfo "Scanning Sheet:", "'" & ws.Name & "'"
-        If ws.UsedRange.Cells.Count > 1000000 Then ' Safety check for huge sheets
-            WriteInfo "NOTE:", "Sheet is very large, analysis might be slow or incomplete.", 1
-            ' GoTo NextSheet ' Uncomment this line to skip very large sheets
+        If ws.UsedRange.Cells.Count > 2000000 Then ' Safety check for huge sheets
+            WriteInfo "NOTE:", "Sheet is very large, analysis skipped to prevent freezing.", 1
+            GoTo NextSheet ' Skip very large sheets
         End If
 
         For Each col In ws.UsedRange.Columns
@@ -168,12 +168,15 @@ Private Sub AnalyzeCellContent(wb As Workbook)
             currentFormulaR1C1 = ""
             formulaStartRow = 0
             
+            'This loop is inefficient for huge numbers of no-scan zones, but fine for dozens.
             For Each cell In col.Cells
                 ' Check if the cell is inside a no-scan zone (like a query result table)
                 Dim key As Variant, skipCell As Boolean
                 skipCell = False
                 For Each key In noScanZones.Keys
-                    If Not Intersect(cell, ws.Range(key)) Is Nothing Then
+                    '--- THE FIX IS ON THE NEXT LINE ---
+                    ' Changed ws.Range(key) to Application.Range(key) to handle cross-sheet references correctly
+                    If Not Intersect(cell, Application.Range(key)) Is Nothing Then
                         skipCell = True
                         Exit For
                     End If
@@ -187,7 +190,12 @@ Private Sub AnalyzeCellContent(wb As Workbook)
                         Else
                             ' End the previous tracking run if there was one
                             If isTrackingFormula Then
-                                WriteInfo "Formula Range:", ws.Range(ws.Cells(formulaStartRow, col.Column), cell.Offset(-1, 0)).Address, 1
+                                'Check if the start row is valid before creating a range
+                                If cell.Row > formulaStartRow Then
+                                    WriteInfo "Formula Range:", ws.Range(ws.Cells(formulaStartRow, col.Column), cell.Offset(-1, 0)).Address, 1
+                                Else 'Handle single-cell formula range
+                                    WriteInfo "Formula Cell:", ws.Cells(formulaStartRow, col.Column).Address, 1
+                                End If
                                 WriteInfo "Formula (R1C1):", currentFormulaR1C1, 2
                             End If
                             ' Start a new tracking run
@@ -198,7 +206,11 @@ Private Sub AnalyzeCellContent(wb As Workbook)
                     Else
                         ' The formula block has ended
                         If isTrackingFormula Then
-                            WriteInfo "Formula Range:", ws.Range(ws.Cells(formulaStartRow, col.Column), cell.Offset(-1, 0)).Address, 1
+                            If cell.Row > formulaStartRow Then
+                                WriteInfo "Formula Range:", ws.Range(ws.Cells(formulaStartRow, col.Column), cell.Offset(-1, 0)).Address, 1
+                            Else 'Handle single-cell formula range
+                                WriteInfo "Formula Cell:", ws.Cells(formulaStartRow, col.Column).Address, 1
+                            End If
                             WriteInfo "Formula (R1C1):", currentFormulaR1C1, 2
                             isTrackingFormula = False
                         End If
@@ -216,7 +228,7 @@ Private Sub AnalyzeCellContent(wb As Workbook)
                  WriteInfo "Formula (R1C1):", currentFormulaR1C1, 2
             End If
         Next col
-'NextSheet:
+NextSheet:
     Next ws
 End Sub
 
