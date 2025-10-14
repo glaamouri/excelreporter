@@ -1,182 +1,91 @@
-The workflow is:
+/*
+ Étape 1 : Créer une "carte" des dates pour lier chaque date à sa précédente.
+ La fonction LAG(colonne, 1) OVER (ORDER BY colonne) récupère la valeur de la ligne précédente,
+ en se basant sur l'ordre spécifié (ici, l'ordre chronologique des dates).
+*/
+WITH DateMap AS (
+    SELECT
+        DWH_DATE_REF,
+        LAG(DWH_DATE_REF, 1) OVER (ORDER BY DWH_DATE_REF) AS PREVIOUS_DWH_DATE_REF
+    FROM (
+        -- On ne prend que les dates uniques pour construire la carte
+        SELECT DISTINCT DWH_DATE_REF
+        FROM "NCIBL"."OBSTILUI9_T"
+    ) AS DistinctDates
+),
 
-Start with the NSFR_Template.xlsx file (which contains your dashboards, charts, and formulas showing #REF! errors).
+/*
+ Étape 2 : Préparer les données de base.
+ C'est votre requête originale, légèrement réorganisée en CTE pour être réutilisable.
+*/
+BaseData AS (
+    SELECT
+        T1.DWH_DATE_REF, T1.STIRAC, T1.STIGRE, T1.STIRUB, T1.STIMON, T1.STIORG, T1.STIMNT2, T1.STIMNT4, T1.STITPO,
+        T1.FRRGRPCTRP, T1.STITGR, T2.ACC_TYPE, T2.COMPTE, T2.SOUS_COMPTE,
+        CASE
+            WHEN ISNULL(T1.STIECH, 0) > 0 THEN CONVERT(DATETIME, CONVERT(VARCHAR(8), T1.STIECH), 112)
+            ELSE -1
+        END AS TOT_O,
+        CASE
+            WHEN ISNULL(T1.STIECH, 0) > 0 THEN
+                CASE
+                    WHEN CONVERT(DATETIME, CONVERT(VARCHAR(8), T1.STIDVA), 112) <= 183 THEN 'moins de 6 mois'
+                    WHEN CONVERT(DATETIME, CONVERT(VARCHAR(8), T1.STIECH), 112) <= 365 THEN 'moins d''un an'
+                    ELSE 'plus d''un an'
+                END
+            ELSE ' '
+        END AS BUCKET
+    FROM "NCIBL"."OBSTILUI9_T" AS T1
+    LEFT JOIN "NCIBL"."WKFS.LKP_IFRSLUX" AS T2 ON T2.PLNB = T1.STIPLNB
+    WHERE
+        -- Conservez vos filtres d'origine
+        T1.DWH_DATE_REF >= DATEADD(month, -1, CAST(GETDATE() AS DATE))
+        AND T1.STITPO = 'P'
+        AND T1.STIIGR = '0'
+        AND (T1.STIMNT2 <> 0 OR T1.STIMNT4 <> 0)
+        AND T1.STIGRE < 800
+)
 
-The Java program will open this template in memory.
+/*
+ Étape 3 : Sélection finale qui assemble les données du jour actuel et du jour précédent.
+*/
+SELECT
+    T_Actuel.*, -- Sélectionne toutes les colonnes de la date de référence actuelle
 
-It will create the three data sheets (DWH Dates, DWH Day, LKP_IFRSLUX) and populate them with fresh data from the SQL queries.
+    -- Ajoute les colonnes de la date de référence précédente en les renommant
+    T_Precedent.DWH_DATE_REF    AS DWH_DATE_REF_PREVIOUS,
+    T_Precedent.STIMON          AS STIMON_PREVIOUS,
+    T_Precedent.STIMNT2         AS STIMNT2_PREVIOUS,
+    T_Precedent.STIMNT4         AS STIMNT4_PREVIOUS,
+    T_Precedent.STIORG          AS STIORG_PREVIOUS,
+    T_Precedent.TOT_O           AS TOT_O_PREVIOUS,
+    T_Precedent.BUCKET          AS BUCKET_PREVIOUS
+    -- Ajoutez ici toute autre colonne du jour précédent que vous souhaitez afficher
 
-It will then force Excel's calculation engine to update all formulas across the entire workbook. The formulas on your dashboard will now find the data in the new sheets and calculate correctly.
+FROM BaseData AS T_Actuel
 
-Finally, it will save the result as a new, timestamped, read-only report file.
+-- Jointure avec la carte des dates pour trouver la date précédente pour la ligne actuelle
+LEFT JOIN DateMap ON T_Actuel.DWH_DATE_REF = DateMap.DWH_DATE_REF
 
-I have updated the Java code to follow this exact logic.
+-- Jointure sur les données de base une seconde fois pour récupérer les informations de la date précédente
+LEFT JOIN BaseData AS T_Precedent
+    ON DateMap.PREVIOUS_DWH_DATE_REF = T_Precedent.DWH_DATE_REF
+    /*
+     !!! POINT CRUCIAL !!!
+     La condition de jointure ci-dessous doit se baser sur la clé qui identifie
+     un élément unique à travers le temps. J'ai supposé la combinaison suivante.
+     Veuillez la vérifier et l'adapter à votre modèle de données.
+    */
+    AND T_Actuel.STIRAC = T_Precedent.STIRAC
+    AND T_Actuel.STIRUB = T_Precedent.STIRUB
+    AND T_Actuel.COMPTE = T_Precedent.COMPTE
+    AND T_Actuel.SOUS_COMPTE = T_Precedent.SOUS_COMPTE
 
-Part 1: Prepare Your Template
-Before running the code, make sure you have the NSFR_Template.xlsx file ready, as we discussed in the previous step:
+WHERE
+    -- Vous pouvez remettre un filtre sur les dates ici si vous ne voulez que certains jours
+    T_Actuel.DWH_DATE_REF IN ('2025-09-26', '2025-09-25', '2025-09-24', '2025-09-22', '2025-09-19', '2025-09-17', '2025-09-16', '2025-09-15')
 
-It's a copy of your original file.
-
-The data sheets (DWH Dates, DWH Day, etc.) and other unneeded sheets (CAPITAUX PROPRES ET RECAP, etc.) have been deleted.
-
-The broken Named Ranges have been cleaned up via the Name Manager.
-
-Part 2: The Updated Java Code
-This new class, ReportGeneratorFromTemplate, is designed to perform the complete workflow. It now loads the template, handles existing sheets, and forces the critical formula recalculation at the end.
-
-Java
-
-import org.apache.poi.ss.usermodel.*;
-import org.apache.poi.xssf.usermodel.XSSFSheet;
-import org.apache.poi.xssf.usermodel.XSSFWorkbook;
-
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.sql.*;
-import java.text.SimpleDateFormat;
-import java.util.Date;
-
-public class ReportGeneratorFromTemplate {
-
-    // --- CONFIGURATION ---
-    private static final String TEMPLATE_FILE_PATH = "NSFR_Template.xlsx"; // The path to your template file
-    private static final String OUTPUT_FILE_PATH = "NSFR_Report_" + new SimpleDateFormat("yyyy-MM-dd").format(new Date()) + ".xlsx";
-
-    // This connection string is built based on your report (Windows Authentication).
-    // You might need to add 'encrypt=true;trustServerCertificate=true;' for modern drivers.
-    private static final String DB_CONNECTION_STRING = "jdbc:sqlserver://SRVDWH;databaseName=NCIBL;integratedSecurity=true;encrypt=true;trustServerCertificate=true;";
-
-    // !!! IMPORTANT: REPLACE THESE WITH YOUR ACTUAL SQL QUERIES !!!
-    private static final String SQL_FOR_DWH_DATES = "SELECT * FROM YourTableForDwhDates;"; // Replace this
-    private static final String SQL_FOR_DWH_DAY = "SELECT * FROM YourTableForDwhDay;";   // Replace this
-    private static final String SQL_FOR_LKP_IFRSLUX = "SELECT * FROM YourTableForIfrsLux;"; // Replace this
-
-
-    public static void main(String[] args) {
-        System.out.println("Starting report generation process from template...");
-
-        try (FileInputStream templateFileStream = new FileInputStream(TEMPLATE_FILE_PATH);
-             XSSFWorkbook workbook = new XSSFWorkbook(templateFileStream)) {
-
-            System.out.println("Template file '" + TEMPLATE_FILE_PATH + "' loaded successfully.");
-
-            // Step 1: Inject the three data sheets into the workbook from the database
-            generateSheetFromQuery(workbook, "DWH Dates", SQL_FOR_DWH_DATES);
-            generateSheetFromQuery(workbook, "DWH Day", SQL_FOR_DWH_DAY);
-            generateSheetFromQuery(workbook, "LKP_IFRSLUX", SQL_FOR_LKP_IFRSLUX);
-
-            // Step 2: Force recalculation of all formulas in the entire workbook
-            recalculateAllFormulas(workbook);
-
-            // Step 3: Write the final, calculated workbook to a new file
-            System.out.println("Saving final report to '" + OUTPUT_FILE_PATH + "'...");
-            try (FileOutputStream outputStream = new FileOutputStream(OUTPUT_FILE_PATH)) {
-                workbook.write(outputStream);
-            }
-            
-            // Step 4: Set the final report to be read-only
-            File finalReport = new File(OUTPUT_FILE_PATH);
-            if (finalReport.exists()) {
-                finalReport.setReadOnly();
-                System.out.println("Final report has been set to read-only.");
-            }
-            
-            System.out.println("Process completed successfully.");
-
-        } catch (IOException | SQLException e) {
-            System.err.println("A critical error occurred during the report generation.");
-            e.printStackTrace();
-        }
-    }
-
-    /**
-     * Runs a query and writes the results to a sheet. If the sheet already exists, it is deleted and recreated.
-     */
-    private static void generateSheetFromQuery(XSSFWorkbook workbook, String sheetName, String sqlQuery) throws SQLException {
-        System.out.println("  -> Generating data for sheet: '" + sheetName + "'...");
-
-        // Remove the sheet if it already exists to ensure a clean slate
-        int existingSheetIndex = workbook.getSheetIndex(sheetName);
-        if (existingSheetIndex != -1) {
-            workbook.removeSheetAt(existingSheetIndex);
-        }
-        XSSFSheet sheet = workbook.createSheet(sheetName);
-
-        try (Connection conn = DriverManager.getConnection(DB_CONNECTION_STRING);
-             Statement stmt = conn.createStatement();
-             ResultSet rs = stmt.executeQuery(sqlQuery)) {
-
-            ResultSetMetaData metaData = rs.getMetaData();
-            int columnCount = metaData.getColumnCount();
-
-            // Create Header Row
-            Row headerRow = sheet.createRow(0);
-            CellStyle headerStyle = createHeaderStyle(workbook);
-            for (int i = 1; i <= columnCount; i++) {
-                Cell cell = headerRow.createCell(i - 1);
-                cell.setCellValue(metaData.getColumnLabel(i));
-                cell.setCellStyle(headerStyle);
-            }
-
-            // Write Data Rows
-            int rowNum = 1;
-            while (rs.next()) {
-                Row row = sheet.createRow(rowNum++);
-                for (int i = 1; i <= columnCount; i++) {
-                    Cell cell = row.createCell(i - 1);
-                    Object value = rs.getObject(i);
-                    // Set cell value based on its type
-                    if (value instanceof String) {
-                        cell.setCellValue((String) value);
-                    } else if (value instanceof Number) {
-                        cell.setCellValue(((Number) value).doubleValue());
-                    } else if (value instanceof java.sql.Date || value instanceof java.sql.Timestamp) {
-                        CellStyle dateStyle = workbook.createCellStyle();
-                        CreationHelper createHelper = workbook.getCreationHelper();
-                        dateStyle.setDataFormat(createHelper.createDataFormat().getFormat("yyyy-mm-dd hh:mm:ss"));
-                        cell.setCellValue((Date) value);
-                        cell.setCellStyle(dateStyle);
-                    } else if (value != null) {
-                        cell.setCellValue(value.toString());
-                    }
-                }
-            }
-            
-            for(int i = 0; i < columnCount; i++) {
-                sheet.autoSizeColumn(i);
-            }
-            System.out.println("     Done. Wrote " + (rowNum - 1) + " rows of data to '" + sheetName + "'.");
-        }
-    }
-
-    /**
-     * CRITICAL STEP: This method iterates through all formulas in the workbook and calculates their results.
-     */
-    private static void recalculateAllFormulas(XSSFWorkbook workbook) {
-        System.out.println("Recalculating all formulas in the workbook...");
-        FormulaEvaluator evaluator = workbook.getCreationHelper().createFormulaEvaluator();
-        evaluator.evaluateAll();
-        System.out.println(" -> Formula recalculation complete.");
-    }
-
-    /**
-     * Helper method to create a bold style for header cells.
-     */
-    private static CellStyle createHeaderStyle(Workbook workbook) {
-        CellStyle style = workbook.createCellStyle();
-        Font font = workbook.createFont();
-        font.setBold(true);
-        style.setFont(font);
-        return style;
-    }
-}
-Part 3: Instructions for Use
-Place the Template: Put your cleaned NSFR_Template.xlsx file in the root directory of your Java project, or update the TEMPLATE_FILE_PATH constant with the correct path.
-
-Update the Code: Create a new Java class ReportGeneratorFromTemplate.java, paste the code above, and replace the placeholder SQL queries with your real ones.
-
-Run the main method.
-
-When you run it, you will see a console output showing the steps. The final result will be a new file, for example, NSFR_Report_2025-10-06.xlsx. When you open this new file, the Dashboard_SdM and other sheets should be fully calculated and showing the correct values, just like your original file did.
+ORDER BY
+    T_Actuel.DWH_DATE_REF DESC, -- Ordonner par date la plus récente en premier
+    T_Actuel.STIRAC,
+    T_Actuel.STIRUB;
