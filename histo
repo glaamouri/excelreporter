@@ -1,0 +1,129 @@
+// Importations nécessaires pour Apache POI et la gestion de dates/fichiers
+import org.apache.poi.ss.usermodel.*;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.List;
+// ... Vos importations existantes (LinkedHashMap, Arrays, etc.)
+
+// ... Votre déclaration de classe MBean ...
+
+public void executeTask() throws BS_xslst {
+    log.info(Flog.getFunctName() + " begin");
+    try {
+        LinkedHashMap<String, Object> mlhm = new LinkedHashMap<>();
+        
+        // --- ÉTAPE 1 : Exécution de votre processus de remplissage des données ---
+        // Ce code génère ou met à jour le fichier "rapport.xlsx" dans le répertoire d'exécution.
+        this.bs_comp.execute_Process(new ArrayList<TabDeliverContent>(
+            Arrays.asList(
+                new TabDeliverContent(true, COLUMN_LABEL.QUERY_RESULT, "sql_DWH_dates", SQLDB.DWH, new XlsExporter("rapport", 2, "DWH_Dates", 0, EXT.xlsx), gm, "Rapport quotidien", new GroupMail("xxxxx")),
+                new TabDeliverContent(true, COLUMN_LABEL.QUERY_RESULT, "sql_DWH_day", SQLDB.DWH, new XlsExporter("rapport", 4, "DWH_Day", 0, EXT.xlsx), gm, "Rapport quotidien", new GroupMail("xxxxx"))
+            )
+        ), mlhm, true);
+
+        // --- ÉTAPE 2 : Mise à jour de la feuille d'historique ---
+        // On utilise un chemin relatif car le fichier est dans le contexte d'exécution de l'EJB.
+        String cheminRapport = "rapport.xlsx"; 
+        
+        // Appel de la méthode qui contient toute la logique de manipulation de l'historique.
+        updateHistorySheet(cheminRapport);
+        log.info("Mise à jour de la feuille 'Histo' terminée avec succès.");
+
+    } catch (Exception e) {
+        // Log de l'erreur de manière détaillée
+        log.error("Une erreur majeure est survenue dans executeTask", e);
+    }
+    log.info(Flog.getFunctName() + " end");
+}
+
+/**
+ * Met à jour la feuille 'Histo' dans le fichier rapport.xlsx en y ajoutant les données du jour.
+ * Cette méthode lit le 'Dashboard', décale l'historique existant et insère une nouvelle colonne.
+ *
+ * @param reportPath Le chemin relatif vers le fichier rapport.xlsx.
+ * @throws IOException Si une erreur de lecture/écriture du fichier survient.
+ */
+private void updateHistorySheet(String reportPath) throws IOException {
+    // Utilisation d'un try-with-resources pour garantir la fermeture automatique des flux de fichiers.
+    try (FileInputStream fis = new FileInputStream(reportPath);
+         Workbook workbook = new XSSFWorkbook(fis)) {
+        
+        // --- A. Forcer le recalcul de toutes les formules du classeur ---
+        // C'est l'étape CRUCIALE pour s'assurer que le Dashboard reflète les nouvelles données
+        // qui viennent d'être chargées par votre processus.
+        log.info("Recalcul de toutes les formules du classeur...");
+        FormulaEvaluator evaluator = workbook.getCreationHelper().createFormulaEvaluator();
+        evaluator.evaluateAll();
+
+        // --- B. Lire et sauvegarder les données du 'Dashboard' mis à jour ---
+        log.info("Lecture des données du 'Dashboard'...");
+        List<Object> snapshotDuJour = new ArrayList<>();
+        Sheet dashboardSheet = workbook.getSheet("Dashboard"); // Adaptez le nom si nécessaire
+        final int COLONNE_DASHBOARD = 7; // Colonne H (index 7)
+
+        // Itération sur chaque ligne pour extraire la valeur de la colonne H
+        for (int i = 0; i <= dashboardSheet.getLastRowNum(); i++) {
+            Row row = dashboardSheet.getRow(i);
+            Cell cell = (row == null) ? null : row.getCell(COLONNE_DASHBOARD, Row.MissingCellPolicy.RETURN_BLANK_AS_NULL);
+            
+            if (cell == null) {
+                snapshotDuJour.add(""); // Ajoute une chaîne vide pour les cellules null
+            } else {
+                switch (cell.getCellType()) {
+                    case STRING: snapshotDuJour.add(cell.getStringCellValue()); break;
+                    case NUMERIC:
+                        if (DateUtil.isCellDateFormatted(cell)) {
+                            snapshotDuJour.add(cell.getDateCellValue());
+                        } else {
+                            snapshotDuJour.add(cell.getNumericCellValue());
+                        }
+                        break;
+                    case BLANK: snapshotDuJour.add(""); break;
+                    // Ajoutez d'autres types (BOOLEAN, FORMULA) au besoin
+                    default: snapshotDuJour.add("");
+                }
+            }
+        }
+        
+        // --- C. Mettre à jour la feuille 'Histo' ---
+        log.info("Mise à jour de la feuille 'Histo'...");
+        Sheet histoSheet = workbook.getSheet("Histo"); // Adaptez le nom si nécessaire
+        final int PREMIERE_COLONNE_HISTO = 5; // Colonne F (index 5)
+
+        // Décale toutes les colonnes existantes d'une position vers la droite pour libérer de l'espace.
+        if (histoSheet.getRow(0) != null && histoSheet.getRow(0).getLastCellNum() >= PREMIERE_COLONNE_HISTO) {
+            histoSheet.shiftColumns(PREMIERE_COLONNE_HISTO, histoSheet.getLastColumn() + 5, 1, true, false); // +5 pour marge
+        }
+        
+        // --- D. Écrire la date du jour et les données sauvegardées dans la nouvelle colonne ---
+        SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd");
+        String dateAujourdhui = sdf.format(new Date());
+
+        for (int i = 0; i < snapshotDuJour.size(); i++) {
+            Row row = histoSheet.getRow(i);
+            if (row == null) row = histoSheet.createRow(i);
+            
+            Cell cell = row.createCell(PREMIERE_COLONNE_HISTO);
+            
+            if (i == 0) { // Pour la première ligne, on écrit la date du jour comme en-tête
+                cell.setCellValue(dateAujourdhui);
+            } else {
+                Object value = snapshotDuJour.get(i);
+                if (value instanceof String) cell.setCellValue((String) value);
+                else if (value instanceof Double) cell.setCellValue((Double) value);
+                else if (value instanceof Date) cell.setCellValue((Date) value);
+            }
+        }
+        
+        // --- E. Sauvegarder les modifications dans le fichier ---
+        // Le FileInputStream est déjà fermé par le try-with-resources.
+        try (FileOutputStream fos = new FileOutputStream(reportPath)) {
+            workbook.write(fos);
+        }
+    } // Le workbook.close() est implicitement appelé ici
+}
